@@ -139,7 +139,7 @@ nc_temp
 terra_temp
 raster_brick
 
-# Plot one day
+# Plot data
 plot(raster_brick[[1]], main = "ERA-5 Reanalysis Demo (Temperature)")
 
 # Extract precipitation values
