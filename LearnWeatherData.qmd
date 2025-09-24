@@ -1,0 +1,10 @@
+---
+title: "Basic Weather Data Manipulations"
+author: "Loïc Henry"
+format: html
+editor: visual
+---
+
+## Introduction
+
+In this document, you will lean some of the basics of weather data.
