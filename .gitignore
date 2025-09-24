@@ -47,3 +47,6 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# ERA 5 API key
+code/ERA5_APIKey.R

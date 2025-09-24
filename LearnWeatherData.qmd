@@ -1,10 +1,84 @@
 ---
-title: "Basic Weather Data Manipulations"
+title: "Working with Weather and Climate Data in R"
 author: "Loïc Henry"
+date: today
 format: html
-editor: visual
+execute:
+  echo: true
+  warning: false
+  message: false
 ---
 
-## Introduction
+# Introduction
 
-In this document, you will lean some of the basics of weather data.
+Understanding and analyzing weather data is central to many applications in economics, environmental sciences, and policy evaluation.  
+This document introduces the main **data sources** and demonstrates an **R-based workflow** to download, explore, and aggregate weather data (using ERA5 reanalysis as an example).
+
+---
+
+## Choosing Weather Data: data type and source
+
+### Weather station data
+- Provide **accurate** weather data for specific locations.  
+- Have **missing observations**, since stations appear/disappear over time.  
+- Possible to interpolate missing data (e.g., inverse distance weighting), but this can introduce measurement errors and bias.  
+- Example: [NOAA Global Daily Weather Station Data](https://www.ncei.noaa.gov/metadata/geoportal/rest/metadata/item/gov.noaa.ncdc:C00861/html)
+
+### Gridded weather datasets
+- Provide a **uniform** weather record across space and time.  
+- Constructed from station data + statistical interpolation and/or **reanalysis models**.  
+- Several freely available sources:  
+  - [PRISM](https://prism.oregonstate.edu/) — US, daily, high resolution (4km).  
+  - [ERA5](https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels?tab=overview) — global, hourly, ~25km resolution.  
+  - [CRU](https://crudata.uea.ac.uk/cru/data/hrg/) — global, monthly, ~56km resolution.  
+
+---
+
+## Setup: Importing ERA5 Data
+
+To work with ERA5 data:
+
+1. Register at ECMWF: <https://www.ecmwf.int/>  
+2. Get your API keys: <https://cds.climate.copernicus.eu/how-to-api>  
+3. Save your key securely — **never share it**. 
+  -> Save it in a R Script in your project, named `ERA5_APIKey.R`, and add this file to your `.gitignore` if you use Git.
+4. Go to [ERA5 Daily Statistics](https://cds.climate.copernicus.eu/datasets/derived-era5-single-levels-daily-statistics?tab=download), accept the terms, and copy the API request.  
+5. Use the [`ecmwfr`](https://bluegreen-labs.github.io/ecmwfr/) package in R to make requests.  
+
+---
+
+# Workflow in R
+
+We now illustrate a complete workflow for downloading, importing, exploring, and aggregating ERA5 weather data in R.
+
+```{r setup}
+#===============================================================================
+# Preamble: setup the folders and load packages ------
+#===============================================================================
+
+# Clean memory 
+rm(list=ls())
+gc()
+
+# Load packages
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(
+  tidyverse, terra, maps, here, ncdf4, raster, climate, devtools, 
+  sf, sp, rnaturalearth, Matrix, ecmwfr
+)
+
+# Setup project directories
+dir <- list()
+dir$root <- here()
+dir$source <- here(dir$root, "source")   # raw data
+dir$data <- here(dir$root, "data")       # processed data
+dir$code <- here(dir$root, "code")       # scripts
+dir$figures <- here(dir$root, "figures") # plots
+dir$tables <- here(dir$root, "tables")   # tables
+
+# Create missing directories
+lapply(dir, function(i) dir.create(i, recursive = TRUE, showWarnings = FALSE))
+
+```
+
+
