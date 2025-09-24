@@ -51,6 +51,10 @@ To work with ERA5 data:
 
 We now illustrate a complete workflow for downloading, importing, exploring, and aggregating ERA5 weather data in R.
 
+## Preamble of your scripts
+
+First, set up all your working directories, load useful packages and then add your API key.
+
 ```{r setup}
 #===============================================================================
 # Preamble: setup the folders and load packages ------
@@ -79,6 +83,146 @@ dir$tables <- here(dir$root, "tables")   # tables
 # Create missing directories
 lapply(dir, function(i) dir.create(i, recursive = TRUE, showWarnings = FALSE))
 
+# Register your API key once
+# Execute the script where you have stored identification key
+source(here(dir$code, "ERA5_APIKey.R"))
+# And then set key
+wf_set_key(key = key_loic)
+
 ```
+
+## Downloading one batch of data
+Let's import the temperature data for your month of birth in Europe.
+
+```{r download}
+request <- list(
+  dataset_short_name = "reanalysis-era5-land-monthly-means",
+  product_type = "monthly_averaged_reanalysis",
+  variable = "2m_temperature",
+  year = "1993",
+  month = "07",
+  time = "00:00",
+  data_format = "netcdf",
+  download_format = "unarchived",
+  area = c(72, -31, 27, 60),
+  target = "TMPFILE"
+)
+
+
+# Download (takes ~1 min for one month of Europe data)
+file <- ecmwfr::wf_request(
+  request  = request,
+  transfer = TRUE,
+  path     = here(dir$source)
+)
+
+```
+
+
+## Import the data
+```{r import-data}
+# Open with ncdf4
+nc_temp <- ncdf4::nc_open(file)
+
+# With terra
+terra_temp <- terra::rast(file)
+
+# With raster
+raster_brick <- raster::brick(file)
+raster_brick
+```
+
+## Explore the data
+
+```{r explore-data}
+nc_temp
+terra_temp
+raster_brick
+
+# Plot one day
+plot(raster_brick[[1]], main = "ERA-5 Reanalysis Demo (Temperature)")
+
+# Extract precipitation values
+temp <- ncdf4::ncvar_get(nc_temp, "t2m")
+dim(temp) # 3D array: lon x lat 
+```
+
+## Aggregate spatially (example: EU Nuts3)
+
+We often need to aggregate gridded climate data to match the geographic and temporal scale of socio-economic outcomes (e.g., departments, counties, municipalities).
+
+### Load your geographic boundaries shape file
+
+```{r aggregate-spatially}
+
+# Find and load nuts-3 geographic boundaries
+nuts3_sf
+# nuts3_sp <- as(nuts3_sf, "Spatial")
+
+# Quick check: CRS consistency
+raster::crs(raster_brick)
+sf::st_crs(nuts3_sf)
+
+```
+
+
+### Construct the aggregation matrix
+
+We now construct a projection matrix $P$ such that:
+
+$$ A = P \times G $$
+
+where:
+- $G$ is the matrix of gridded climate data (cells × time),
+- $A$ is the aggregated matrix (Nuts-3 × time).
+
+```{r projection-matrix}
+
+# Identify in which nuts3 region falls each cell
+id <- raster_brick
+info <- raster::extract(x = id, y = nuts3_sp, cellnumbers=TRUE)
+
+# Build transformation matrix with weights
+dinfo <- do.call("rbind", lapply(names(info), function(i) {
+  df <- as.data.frame(info[[i]])
+  df$w <- df$gpw_v4_population_count_adjusted_to_2015_unwpp_country_totals_rev11_2020_2pt5_min *
+          df$weight / sum(df$gpw_v4_population_count_adjusted_to_2015_unwpp_country_totals_rev11_2020_2pt5_min *
+                          df$weight, na.rm = TRUE)
+  df$dept.order <- match(i,names(info))
+  df
+}))
+
+# Sparse projection matrix
+g <- stack(raster_brick[[1]], raster_brick[[2]], raster_brick[[3]])
+G <- g[]  
+
+P_weight <- Matrix::sparseMatrix(
+  i = dinfo$cell,
+  j = dinfo$dept.order,
+  x = dinfo$w,
+  dims = c(ncell(g), length(unique(dinfo$dept.order)))
+)
+
+# Aggregated data
+A_weight <- t(P_weight) %*% G
+nuts3_temp <- data.frame(as.matrix(A_weight))
+nuts3_temp$ame <- row.names(nuts3_temp)
+```
+
+## Visualize aggregated results
+
+```{r maps}
+
+nuts3_temp_sf <- nuts3_temp %>%
+  left_join(dept_sf, by = "name") %>% 
+  st_as_sf()
+
+ggplot(nuts3_temp_sf) +
+  geom_sf(aes(fill = X0), color = "black", alpha = 0.75) +
+  scale_fill_viridis_c() +
+  labs(title = "Department-level Precipitation (ERA5, for your month of birth)")
+
+```
+
 
 
