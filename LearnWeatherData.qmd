@@ -26,24 +26,25 @@ This document introduces the main **data sources** and demonstrates an **R-based
 
 ### Gridded weather datasets
 - Provide a **uniform** weather record across space and time.  
-- Constructed from station data + statistical interpolation and/or **reanalysis models**.  
+- Constructed from station data + statistical interpolation and/or **reanalysis models**. Be aware that this reanalysis can sometimes introduce local biases for some weather variables.
 - Several freely available sources:  
   - [PRISM](https://prism.oregonstate.edu/) — US, daily, high resolution (4km).  
-  - [ERA5](https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels?tab=overview) — global, hourly, ~25km resolution.  
+  - [ERA5](https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels?tab=overview) — global, hourly, ~25km resolution. We will use this one in the following, but at the monthly resolution, zooming on Europe, to limit the size of the data.
   - [CRU](https://crudata.uea.ac.uk/cru/data/hrg/) — global, monthly, ~56km resolution.  
 
 ---
 
 ## Setup: Importing ERA5 Data
 
-To work with ERA5 data:
+To work with ERA5 data, you need to:
 
 1. Register at ECMWF: <https://www.ecmwf.int/>  
 2. Get your API keys: <https://cds.climate.copernicus.eu/how-to-api>  
 3. Save your key securely — **never share it**. 
-  -> Save it in a R Script in your project, named `ERA5_APIKey.R`, and add this file to your `.gitignore` if you use Git.
-4. Go to [ERA5 Daily Statistics](https://cds.climate.copernicus.eu/datasets/derived-era5-single-levels-daily-statistics?tab=download), accept the terms, and copy the API request.  
-5. Use the [`ecmwfr`](https://bluegreen-labs.github.io/ecmwfr/) package in R to make requests.  
+  * Save it in a R Script in your project, named `ERA5_APIKey.R`, and add this file to your `.gitignore` if you use Git.
+4. Go to [ERA5-Land Monthly Statistics](https://cds.climate.copernicus.eu/datasets/reanalysis-era5-land-monthly-means?tab=download), accept the terms, select the data of your choice and copy the API request.
+  * For our exercise: select "Monthly averaged reanalysis" for product type, "2m temperature" for variable, select observations corresponding to your year and month of birth, limit the subregion to Europe (72° North, -31° West, 27° South and 60° East), and select "netcdf4" for data format. Then click to unhide the API request shown in the bottom of the webpage, and copy it.
+5. Use the [`ecmwfr`](https://bluegreen-labs.github.io/ecmwfr/) package in R to translate ERA5 API requests into built-in R commands from the `ecmwfr` package.  
 
 ---
 
@@ -73,9 +74,11 @@ pacman::p_load(
 
 # Setup project directories
 dir <- list()
-dir$root <- here()
-dir$source <- here(dir$root, "source")   # raw data
+dir$root <- here()                       # R project root 
 dir$data <- here(dir$root, "data")       # processed data
+dir$source <- here(dir$data, "source")   # raw data
+dir$intermediary <- here(dir$data, "intermediary")   # raw data
+dir$final <- here(dir$data, "final")     # final data
 dir$code <- here(dir$root, "code")       # scripts
 dir$figures <- here(dir$root, "figures") # plots
 dir$tables <- here(dir$root, "tables")   # tables
@@ -87,7 +90,7 @@ lapply(dir, function(i) dir.create(i, recursive = TRUE, showWarnings = FALSE))
 # Execute the script where you have stored identification key
 source(here(dir$code, "ERA5_APIKey.R"))
 # And then set key
-wf_set_key(key = key_loic)
+ecmwfr::wf_set_key(key = key_loic)
 
 ```
 
@@ -95,6 +98,21 @@ wf_set_key(key = key_loic)
 Let's import the temperature data for your month of birth in Europe.
 
 ```{r download}
+
+# This is the request you copied from the ERA5 webpage
+# dataset = "reanalysis-era5-land-monthly-means"
+# request = {
+#     "product_type": ["monthly_averaged_reanalysis"],
+#     "variable": ["2m_temperature"],
+#     "year": ["1993"],
+#     "month": ["07"],
+#     "time": ["00:00"],
+#     "data_format": "netcdf",
+#     "download_format": "unarchived",
+#     "area": [72, -31, 27, 60]
+# }
+# Translate it into a list for ecmwfr and get this below:
+
 request <- list(
   dataset_short_name = "reanalysis-era5-land-monthly-means",
   product_type = "monthly_averaged_reanalysis",
@@ -109,7 +127,7 @@ request <- list(
 )
 
 
-# Download (takes ~1 min for one month of Europe data)
+# Download using commands from ecmwfr (takes ~1 min for one month of Europe data)
 file <- ecmwfr::wf_request(
   request  = request,
   transfer = TRUE,
