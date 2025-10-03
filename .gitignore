@@ -50,3 +50,7 @@ rsconnect/
 
 # R script with ERA 5 API key
 code/ERA5_APIKey.R
+
+# NUTS3 shapefile
+data/source/NUTS*
+

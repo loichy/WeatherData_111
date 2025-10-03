@@ -138,42 +138,103 @@ file <- ecmwfr::wf_request(
 
 
 ## Import the data
+
+We here see three different ways of manipulating netCDF data in R. The `ncdf4` package is the most basic one, but requires more coding to manipulate the data. The `terra` and `raster` packages provide more user-friendly functions to manipulate raster data, and are more similar to GIS software. The `raster` package is older and more widely used, but the `terra` package is its successor and is being actively developed.
+
 ```{r import-data}
 # Open with ncdf4
 nc_temp <- ncdf4::nc_open(file)
 
 # With terra
 terra_temp <- terra::rast(file)
+terra_temp
 
 # With raster
 raster_brick <- raster::brick(file)
 raster_brick
 ```
 
-## Explore the data
+We can see that our spatial grid is made of 451 rows and 911 columns, which gives a total of 410,761 grid cells covering Europe. The data contains one layer corresponding to the average temperature at 2m above ground for your month of birth. If you had more variable associated to this same spatial grid (e.g., precipitation, wind speed, etc.), or if you had data for multiple months/years, you would have more layers in your raster object.
 
-```{r explore-data}
-nc_temp
-terra_temp
-raster_brick
 
-# Plot data
-plot(raster_brick[[1]], main = "ERA-5 Reanalysis Demo (Temperature)")
+## Inspect and Explore the data
 
-# Extract precipitation values
-temp <- ncdf4::ncvar_get(nc_temp, "t2m")
-dim(temp) # 3D array: lon x lat 
+Raster objects in R are indexed as [row, column, layer]. You can use the `terra` or `raster` packages to explore and visualize the data.
+
+```{r explore-object, echo=FALSE}
+# inspect the raster object
+# Extract the first row
+terra_temp[1,,]
+dim(terra_temp[1,,])
+
+# Extract the first cell
+terra_temp[1,1,]
+dim(terra_temp[1,1,])
+
+```
+
+You can thus easily extract the variables in a raster to store them in an array (equivalent to a matrix object in R), which will be very often useful to make derivations or to aggregate the data spatially.
+
+```{r extract-variable}
+
+# Extract temperature values in an array "row x col x time"
+temp_array <- terra::as.array(terra_temp)
+str(temp)
+dim(temp) # 3D array: row x col x time
+
+# Extract temperature values in a matrix "cell x time"
+temp_matrix <- terra::as.matrix(terra_temp)
+str(temp)
+dim(temp) # 2D array: cell x time
+
+```
+
+You can also easily transform your raster in a dataframe using the `as.data.frame()` function from the `terra` or `raster` packages.
+
+```{r raster-to-dataframe}
+# Transform raster to dataframe
+temp_df <- as.data.frame(terra_temp, xy = TRUE)
+str(temp_df)
+```
+
+
+You can also visualize one layer of your raster using the built-in R command `plot()`, or use the `ggplot2` package for more advanced visualizations.
+
+```{r visualize-raster}
+
+# Visualize using the plot command
+plot(terra_temp[[1]], main = "ERA-5 Reanalysis Demo (Temperature)")
+
+
+# Visualize using commands from ggplot2 library
+# Once your raster data is transformed in a data.frame object
+ggplot(temp_df) +
+  geom_raster(aes(x = x, y = y, fill = TMPFILE)) +
+  scale_fill_viridis_c() +
+  coord_fixed() +
+  labs(title = "ERA-5 Reanalysis Demo (Temperature)")
+
 ```
 
 ## Aggregate spatially (example: EU Nuts3)
 
-We often need to aggregate gridded climate data to match the geographic and temporal scale of socio-economic outcomes (e.g., departments, counties, municipalities).
+In many situations, you must aggregate gridded weather/climate data to match the geographic and temporal scale of socio-economic outcomes (e.g., departments, counties, municipalities). Let's see one way to do it in R.
 
 ### Load your geographic boundaries shape file
 
+We first download the geographical boundaries of the EU NUTS-2 regions on this [webpage](https://ec.europa.eu/eurostat/web/gisco/geodata/statistical-units/territorial-units-statistics). Then, unzip the downloaded file, and store it into your `source` data folder.
+
+
+We will load the shapefile in R using the `sf` package.
+
 ```{r aggregate-spatially}
 
-# Find and load nuts-3 geographic boundaries
+# Find the shp file
+shp_file <- list.files(here(dir$source), pattern = "*.shp", full.names = TRUE, recursive = T)
+
+# Load the shapefile with sf package
+nuts3_sf <- sf::st_read(shp_file)
+
 nuts3_sf
 # nuts3_sp <- as(nuts3_sf, "Spatial")
 
@@ -182,6 +243,8 @@ raster::crs(raster_brick)
 sf::st_crs(nuts3_sf)
 
 ```
+
+Then, before aggregating your weather data at the NUTS3-level, we must spatially merge them. In particular, we want our weather grid to have the exact same geographical coordinates as the ones in our NUTS3 shapefile.
 
 
 ### Construct the aggregation matrix
