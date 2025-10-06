@@ -179,13 +179,13 @@ You can thus easily extract the variables in a raster to store them in an array 
 
 # Extract temperature values in an array "row x col x time"
 temp_array <- terra::as.array(terra_temp)
-str(temp)
-dim(temp) # 3D array: row x col x time
+str(temp_array)
+dim(temp_array) # 3D array: row x col x time
 
 # Extract temperature values in a matrix "cell x time"
 temp_matrix <- terra::as.matrix(terra_temp)
-str(temp)
-dim(temp) # 2D array: cell x time
+str(temp_array)
+dim(temp_array) # 2D array: cell x time
 
 ```
 
@@ -235,16 +235,101 @@ shp_file <- list.files(here(dir$source), pattern = "*.shp", full.names = TRUE, r
 # Load the shapefile with sf package
 nuts3_sf <- sf::st_read(shp_file)
 
-nuts3_sf
-# nuts3_sp <- as(nuts3_sf, "Spatial")
+```
 
-# Quick check: CRS consistency
-raster::crs(raster_brick)
-sf::st_crs(nuts3_sf)
+This object is a shapefile: it is a specific object in R, not so far from the structure of a `data.frame` object, except that it has a special column containing the geometry of each spatial unit (here, the NUTS3 regions). 
+
+
+```{r str-shapefile}
+
+# Inspect the shapefile
+str(nuts3_sf)
+head(nuts3_sf)
 
 ```
 
-Then, before aggregating your weather data at the NUTS3-level, we must spatially merge them. In particular, we want our weather grid to have the exact same geographical coordinates as the ones in our NUTS3 shapefile.
+
+You can visualize it using the `ggplot2` package.
+
+```{r visualize-shapefile}
+# Visualize the shapefile
+ggplot(nuts3_sf) +
+  geom_sf(fill = "lightgrey", color = "black", alpha = 0.75) +
+  labs(title = "NUTS3 Regions in Europe")
+
+```
+
+If we want to keep the regions within our specific delimited area (Europe), we can crop the shapefile.
+
+```{r crop-shapefile}
+# Crop the shapefile to keep only regions within our area of interest
+crs_nuts3 <- st_crs(nuts3_sf)
+# Define your lat/lon bounding box
+bbox_lonlat <- st_bbox(c(xmin = -31, xmax = 60, ymin = 27, ymax = 72), 
+                       crs = st_crs(4326))  # WGS84 lat/lon
+
+# Convert bbox to an sf object, then transform to match your data's CRS
+bbox_transformed <- st_as_sfc(bbox_lonlat) %>%
+  st_transform(crs_nuts3) %>%
+  st_bbox()
+
+# Now crop with the transformed bbox
+crop_nuts3_sf <- st_crop(nuts3_sf, bbox_transformed)
+
+
+```
+
+
+Check by vizualising that you have indeed now a smaller shapefile:
+```{r visualize-cropped-shapefile}
+# Visualize the cropped shapefile
+ggplot(crop_nuts3_sf) +
+  geom_sf(fill = "lightgrey", color = "black", alpha = 0.75) +
+  labs(title = "Cropped NUTS3 Regions in Europe")
+```
+
+
+Then, before aggregating your weather data at the NUTS3-level, we must spatially merge them. In particular, we want our NUTS3 shape file to have the exact same geographical coordinate system as the ones in out weather grid. For instance, if we currently layered our two raster and sf objects, we would see that they do not overlap perfectly.
+
+```{r check-overlap1}
+
+# Quick visualization to check overlap using ggplot2
+ggplot() +
+  geom_sf(data = crop_nuts3_sf, fill = "lightgrey", color = "black", alpha = 0.025) +
+  geom_raster(data = temp_df, aes(x = x, y = y, fill = TMPFILE)) +
+  scale_fill_viridis_c() +
+  labs(title = "Check Overlap between NUTS3 and ERA5 Data")
+
+```
+
+There is no overlap.
+
+We know that ERA5 data uses a regular latitude-longitude grid in the WGS84 coordinate system, which corresponds to EPSG:4326. Let's transform the NUTS3 shapefile to this CRS.
+
+
+```{r transform-crs-nuts3}
+
+# First, inform R about the coordinate system and extent of the raster
+crs(terra_temp) <- "EPSG:4326"
+
+# Second, Fix the extent based on your actual data coverage
+ext(terra_temp) <- c(-31, 60, 27, 72)  # xmin, xmax, ymin, ymax
+
+# Reproject nuts3 to EPSG:4326
+
+nuts3_sp <- st_transform(crop_nuts3_sf, crs = crs(terra_temp))
+
+```
+
+Check the overlap:
+
+```{r check-overlap2}
+
+# Plot together to verify alignment
+plot(terra_temp, main = "ERA5 with Shapefile")
+plot(st_geometry(nuts3_sp), add = TRUE, border = "red", lwd = 2)
+
+```
 
 
 ### Construct the aggregation matrix
@@ -259,9 +344,10 @@ where:
 
 ```{r projection-matrix}
 
-# Identify in which nuts3 region falls each cell
-id <- raster_brick
+# Identify in which nuts3 region falls each cell (CAN TAKE UP TO 10 MINUTES!)
+id <- terra_temp
 info <- raster::extract(x = id, y = nuts3_sp, cellnumbers=TRUE)
+
 
 # Build transformation matrix with weights
 dinfo <- do.call("rbind", lapply(names(info), function(i) {
@@ -290,18 +376,11 @@ nuts3_temp <- data.frame(as.matrix(A_weight))
 nuts3_temp$ame <- row.names(nuts3_temp)
 ```
 
+
 ## Visualize aggregated results
 
 ```{r maps}
 
-nuts3_temp_sf <- nuts3_temp %>%
-  left_join(dept_sf, by = "name") %>% 
-  st_as_sf()
-
-ggplot(nuts3_temp_sf) +
-  geom_sf(aes(fill = X0), color = "black", alpha = 0.75) +
-  scale_fill_viridis_c() +
-  labs(title = "Department-level Precipitation (ERA5, for your month of birth)")
 
 ```
 
