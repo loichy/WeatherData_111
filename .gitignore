@@ -54,3 +54,6 @@ code/ERA5_APIKey.R
 # NUTS3 shapefile
 data/source/NUTS*
 
+# TMPFILE
+data/source/TMPFILE
+data/source/TMPFILE.nc
