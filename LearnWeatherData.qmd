@@ -123,7 +123,7 @@ request <- list(
   data_format = "netcdf",
   download_format = "unarchived",
   area = c(72, -31, 27, 60),
-  target = "TMPFILE"
+  target = "TMPFILE.nc"
 )
 
 
@@ -209,7 +209,7 @@ plot(terra_temp[[1]], main = "ERA-5 Reanalysis Demo (Temperature)")
 # Visualize using commands from ggplot2 library
 # Once your raster data is transformed in a data.frame object
 ggplot(temp_df) +
-  geom_raster(aes(x = x, y = y, fill = TMPFILE)) +
+  geom_raster(aes(x = x, y = y, fill = `t2m_valid_time=741484800`)) +
   scale_fill_viridis_c() +
   coord_fixed() +
   labs(title = "ERA-5 Reanalysis Demo (Temperature)")
@@ -276,6 +276,9 @@ bbox_transformed <- st_as_sfc(bbox_lonlat) %>%
 # Now crop with the transformed bbox
 crop_nuts3_sf <- st_crop(nuts3_sf, bbox_transformed)
 
+# Then, only keep nuts-3 levels
+crop_nuts3_sf <- crop_nuts3_sf %>% 
+  filter(LEVL_CODE == "3")
 
 ```
 
@@ -296,7 +299,7 @@ Then, before aggregating your weather data at the NUTS3-level, we must spatially
 # Quick visualization to check overlap using ggplot2
 ggplot() +
   geom_sf(data = crop_nuts3_sf, fill = "lightgrey", color = "black", alpha = 0.025) +
-  geom_raster(data = temp_df, aes(x = x, y = y, fill = TMPFILE)) +
+  geom_raster(data = temp_df, aes(x = x, y = y, fill = `t2m_valid_time=741484800`)) +
   scale_fill_viridis_c() +
   labs(title = "Check Overlap between NUTS3 and ERA5 Data")
 
@@ -346,34 +349,54 @@ where:
 
 # Identify in which nuts3 region falls each cell (CAN TAKE UP TO 10 MINUTES!)
 id <- terra_temp
-info <- raster::extract(x = id, y = nuts3_sp, cellnumbers=TRUE)
+info <- terra::extract(
+  x = id, 
+  y = nuts3_sp,
+  cellnumbers = TRUE,
+  weights = TRUE,
+  ID= TRUE
+ )
 
+# info is a data.frame with: ID (polygon), cell, weight, and raster values
+head(info)
 
-# Build transformation matrix with weights
-dinfo <- do.call("rbind", lapply(names(info), function(i) {
-  df <- as.data.frame(info[[i]])
-  df$w <- df$gpw_v4_population_count_adjusted_to_2015_unwpp_country_totals_rev11_2020_2pt5_min *
-          df$weight / sum(df$gpw_v4_population_count_adjusted_to_2015_unwpp_country_totals_rev11_2020_2pt5_min *
-                          df$weight, na.rm = TRUE)
-  df$dept.order <- match(i,names(info))
-  df
-}))
+# Let's rename and prepare
+info <- na.omit(info)
+names(info)[1] <- "poly_id"  # polygon id
+
+# Normalize weights within each polygon: to be the sum of weights (area) of each cell falling in the polygon
+# info <- do.call(rbind, lapply(split(info, info$poly_id), function(df) {
+#   df$w_norm <- df$weight / sum(df$weight, na.rm = TRUE)
+#   df
+# }))
+# 
+# # Check that we have well added all cell areas / or weights, within each polygons
+# check_weights
+# 
+# # Build sparse transformation matrix (cells × polygons)
+# P_weight <- Matrix::sparseMatrix(
+#   i = info$cell,
+#   j = info$poly_id,
+#   x = info$w_norm,
+#   dims = c(ncell(r), length(unique(info$poly_id)))
+# )
+# 
 
 # Sparse projection matrix
-g <- stack(raster_brick[[1]], raster_brick[[2]], raster_brick[[3]])
-G <- g[]  
-
-P_weight <- Matrix::sparseMatrix(
-  i = dinfo$cell,
-  j = dinfo$dept.order,
-  x = dinfo$w,
-  dims = c(ncell(g), length(unique(dinfo$dept.order)))
-)
-
-# Aggregated data
-A_weight <- t(P_weight) %*% G
-nuts3_temp <- data.frame(as.matrix(A_weight))
-nuts3_temp$ame <- row.names(nuts3_temp)
+# g <- stack(raster_brick[[1]], raster_brick[[2]], raster_brick[[3]])
+# G <- g[]  
+# 
+# P_weight <- Matrix::sparseMatrix(
+#   i = dinfo$cell,
+#   j = dinfo$dept.order,
+#   x = dinfo$w,
+#   dims = c(ncell(g), length(unique(dinfo$dept.order)))
+# )
+# 
+# # Aggregated data
+# A_weight <- t(P_weight) %*% G
+# nuts3_temp <- data.frame(as.matrix(A_weight))
+# nuts3_temp$ame <- row.names(nuts3_temp)
 ```
 
 
