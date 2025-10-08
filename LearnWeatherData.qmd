@@ -123,7 +123,7 @@ request <- list(
   data_format = "netcdf",
   download_format = "unarchived",
   area = c(72, -31, 27, 60),
-  target = "TMPFILE.nc"
+  target = "TMPFILE.nc"  # name of the output file
 )
 
 
@@ -154,7 +154,7 @@ raster_brick <- raster::brick(file)
 raster_brick
 ```
 
-We can see that our spatial grid is made of 451 rows and 911 columns, which gives a total of 410,761 grid cells covering Europe. The data contains one layer corresponding to the average temperature at 2m above ground for your month of birth. If you had more variable associated to this same spatial grid (e.g., precipitation, wind speed, etc.), or if you had data for multiple months/years, you would have more layers in your raster object.
+We can see that our spatial grid is made of 451 rows and 911 columns, which gives a total of 410,861 grid cells covering Europe. The data contains one layer corresponding to the average temperature at 2m above ground for your month of birth. If you had more variable associated to this same spatial grid (e.g., precipitation, wind speed, etc.), or if you had data for multiple months/years, you would have more layers in your raster object.
 
 
 ## Inspect and Explore the data
@@ -164,7 +164,7 @@ Raster objects in R are indexed as [row, column, layer]. You can use the `terra`
 ```{r explore-object, echo=FALSE}
 # inspect the raster object
 # Extract the first row
-terra_temp[1,,]
+head(terra_temp[1,,])
 dim(terra_temp[1,,])
 
 # Extract the first cell
@@ -195,6 +195,10 @@ You can also easily transform your raster in a dataframe using the `as.data.fram
 # Transform raster to dataframe
 temp_df <- as.data.frame(terra_temp, xy = TRUE)
 str(temp_df)
+
+# Rename temperature variable
+names(temp_df)[3] <- "t2m"
+
 ```
 
 
@@ -209,7 +213,7 @@ plot(terra_temp[[1]], main = "ERA-5 Reanalysis Demo (Temperature)")
 # Visualize using commands from ggplot2 library
 # Once your raster data is transformed in a data.frame object
 ggplot(temp_df) +
-  geom_raster(aes(x = x, y = y, fill = `t2m_valid_time=741484800`)) +
+  geom_raster(aes(x = x, y = y, fill = t2m)) +
   scale_fill_viridis_c() +
   coord_fixed() +
   labs(title = "ERA-5 Reanalysis Demo (Temperature)")
@@ -299,7 +303,7 @@ Then, before aggregating your weather data at the NUTS3-level, we must spatially
 # Quick visualization to check overlap using ggplot2
 ggplot() +
   geom_sf(data = crop_nuts3_sf, fill = "lightgrey", color = "black", alpha = 0.025) +
-  geom_raster(data = temp_df, aes(x = x, y = y, fill = `t2m_valid_time=741484800`)) +
+  geom_raster(data = temp_df, aes(x = x, y = y, fill = t2m)) +
   scale_fill_viridis_c() +
   labs(title = "Check Overlap between NUTS3 and ERA5 Data")
 
@@ -347,10 +351,14 @@ where:
 
 ```{r projection-matrix}
 
-# Identify in which nuts3 region falls each cell (CAN TAKE UP TO 10 MINUTES!)
-id <- terra_temp
+# Prepare raster for aggregation
+id <- terra_temp # rename it just for convenience
+# need to have an id for each cells to the raster
+id_cells <- terra::setValues(terra::rast(id), 1:terra::ncell(id))
+
+# Identify in which nuts3 region falls each cell using extract command from terra package (CAN TAKE UP TO 10 MINUTES!)
 info <- terra::extract(
-  x = id, 
+  x = c(id_cells,id), 
   y = nuts3_sp,
   cellnumbers = TRUE,
   weights = TRUE,
@@ -359,53 +367,160 @@ info <- terra::extract(
 
 # info is a data.frame with: ID (polygon), cell, weight, and raster values
 head(info)
+str(info)
 
-# Let's rename and prepare
+# rename variables
+names(info)[3] <- "t2m"
+names(info)[2] <- "cell"
+names(info)[1] <- "poly_id"
+
+# Remove any na values
 info <- na.omit(info)
-names(info)[1] <- "poly_id"  # polygon id
+
+# Check number of unique nuts3 regions where there are ERA5 raster cells
+length(unique(info$poly_id))  # should be less or equal than total number of nuts3 regions in nuts3_sp
 
 # Normalize weights within each polygon: to be the sum of weights (area) of each cell falling in the polygon
-# info <- do.call(rbind, lapply(split(info, info$poly_id), function(df) {
-#   df$w_norm <- df$weight / sum(df$weight, na.rm = TRUE)
-#   df
-# }))
-# 
-# # Check that we have well added all cell areas / or weights, within each polygons
-# check_weights
-# 
-# # Build sparse transformation matrix (cells × polygons)
-# P_weight <- Matrix::sparseMatrix(
-#   i = info$cell,
-#   j = info$poly_id,
-#   x = info$w_norm,
-#   dims = c(ncell(r), length(unique(info$poly_id)))
-# )
-# 
+info <- do.call(rbind, lapply(split(info, info$poly_id), function(df) {
+  df$w_norm <- df$weight / sum(df$weight, na.rm = TRUE)
+  df
+}))
 
-# Sparse projection matrix
-# g <- stack(raster_brick[[1]], raster_brick[[2]], raster_brick[[3]])
-# G <- g[]  
-# 
-# P_weight <- Matrix::sparseMatrix(
-#   i = dinfo$cell,
-#   j = dinfo$dept.order,
-#   x = dinfo$w,
-#   dims = c(ncell(g), length(unique(dinfo$dept.order)))
-# )
-# 
-# # Aggregated data
-# A_weight <- t(P_weight) %*% G
-# nuts3_temp <- data.frame(as.matrix(A_weight))
-# nuts3_temp$ame <- row.names(nuts3_temp)
+# Check that we have well added all cell areas / or weights, within each polygons
+check_weights <- info %>%
+  group_by(poly_id) %>%
+  summarize(
+    N_cells = n(),
+    area = sum(weight, na.rm = TRUE), # this is the area of the nuts 3 region
+    total_weight = sum(w_norm, na.rm = TRUE) # this should be equal to 1
+    )
+unique(check_weights$total_weight)
+
+# Ensure indices are integers
+info$cell <- as.integer(info$cell)
+info$poly_id <- as.integer(factor(info$poly_id))
+
+# Build sparse matrix safely
+P_weight <- Matrix::sparseMatrix(
+  i = info$cell,
+  j = info$poly_id,
+  x = info$w_norm,
+  dims = c(terra::ncell(id), length(unique(info$poly_id)))
+)
+
+# Raster values as a matrix (each layer = column)
+G <- as.matrix(values(terra_temp))
+
+# Compute polygon-level weighted mean (aggregate)
+A_weight <- t(P_weight) %*% G
+
+# Convert to data frame
+nuts3_temp <- as.data.frame(as.matrix(A_weight))
+nuts3_temp$poly_id <- unique(info$poly_id)
+
+" Have a look at data at nuts-3 lebv"
+head(nuts3_temp)
+
 ```
 
 
 ## Visualize aggregated results
 
-```{r maps}
+Now, to check that things are aggregated correctly, we can overlap our raster data for temperature with the polygon raster data.
+
+```{r maps-spataggreg}
 
 
 ```
 
+
+# Next steps to go further
+
+
+## Get long series of weather data
+
+The downloading steps would need to be reiterated on multiple months to get several time periods of weather data. 
+
+Explain here how you could generalize the code to download data on a parametrized period.
+
+```{r download-longdata}
+
+```
+
+## Build weather metrics
+
+We hypothesize that we have now monthly data over several years. We would then need to aggregate it at the yearly level. We thus need to compute several statistics at the cell level giving the yearly mean temperature for instance. 
+
+Explain here how you would compute this weather statistics for each cell and each year:
+
+```{r yearly-weather}
+
+```
+
+## Spatially aggregate the weather metrics
+
+Now we have yearly weather, we would like to aggregate it at the polygon level. We have constructed our transformation matrix: when you multiply any raster with the same resolution as the ERA5 data by this matrix, you get spatially averaged data at the NUTS3-polygon level. 
+
+Now, how can you reiterate this process for all years of weather data?
+
+```{r nuts3-weather}
+
+```
+
+## Get economic data at the NUTS3 level
+
+If we want now to estimage the effect of temperature on economic activity in the EU, we would need economic data. In R, we can use the `eurostat` package, which allows to download economic data from the Eurostat API. You can proceed as follows:
+
+```{r download-eurostat}
+
+# install.packages("eurostat")  
+library(eurostat)
+
+# Search for GDP datasets at NUTS level
+search_results <- search_eurostat("GDP NUTS", type = "dataset")
+View(search_results)
+
+# The main dataset for regional GDP is "nama_10r_3gdp"
+# This contains GDP data at NUTS2 and NUTS3 levels
+
+# Download the GDP data
+gdp_data <- get_eurostat("nama_10r_3gdp", time_format = "num")
+
+# View the structure of the data
+str(gdp_data)
+head(gdp_data)
+
+# Filter for NUTS3 level data only
+# NUTS3 codes have 5 characters (e.g., "DE211", "FR101")
+gdp_nuts3 <- gdp_data %>%
+  filter(nchar(as.character(geo)) == 5)
+
+# Filter for specific unit (e.g., current prices in millions of euros)
+# Common units:
+# - MIO_EUR: Million euros
+# - MIO_PPS: Million purchasing power standards
+
+gdp_nuts3_current <- gdp_nuts3 %>%
+  filter(unit == "MIO_EUR")
+
+# View available years
+unique(gdp_nuts3_current$time)
+
+# Filter for years where you have weather data 
+gdp_nuts3_recent <- gdp_nuts3_current %>%
+  filter(time >= 2000 & time <= 2024)
+
+# View the result
+head(gdp_nuts3_recent, 20)
+
+# Plot some of the GDP series to have a look
+# Select randomly 10 NUTS3 regions
+
+
+# plot their time series
+
+
+
+```
 
 
