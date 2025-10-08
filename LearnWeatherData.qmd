@@ -349,7 +349,7 @@ where:
 - $G$ is the matrix of gridded climate data (cells × time),
 - $A$ is the aggregated matrix (Nuts-3 × time).
 
-```{r projection-matrix}
+```{r projection-matrix, eval=FALSE}
 
 # Prepare raster for aggregation
 id <- terra_temp # rename it just for convenience
@@ -365,6 +365,7 @@ info <- terra::extract(
   ID= TRUE
  )
 
+
 # info is a data.frame with: ID (polygon), cell, weight, and raster values
 head(info)
 str(info)
@@ -373,6 +374,7 @@ str(info)
 names(info)[3] <- "t2m"
 names(info)[2] <- "cell"
 names(info)[1] <- "poly_id"
+# ID (renamed to poly_id) corresponds exactly to the row order of the polygon object in nuts3_sp
 
 # Remove any na values
 info <- na.omit(info)
@@ -408,17 +410,32 @@ P_weight <- Matrix::sparseMatrix(
   dims = c(terra::ncell(id), length(unique(info$poly_id)))
 )
 
+# Store as a rds object the P_weight matrix for future use
+saveRDS(P_weight, file = here(dir$intermediary, "P_weight_matrix.rds"))
+
+
+
+
+```
+
+
+Now we have the projection matrix, we can do thespatial aggregation:
+```{r spatial-aggregation}
+
 # Raster values as a matrix (each layer = column)
 G <- as.matrix(values(terra_temp))
 
 # Compute polygon-level weighted mean (aggregate)
+# Load P_weight matrix if needed
+P_weight <- readRDS(here(dir$intermediary, "P_weight_matrix.rds"))
 A_weight <- t(P_weight) %*% G
 
 # Convert to data frame
 nuts3_temp <- as.data.frame(as.matrix(A_weight))
-nuts3_temp$poly_id <- unique(info$poly_id)
+# create variable which is the polygon identifier: row number
+nuts3_temp$poly_id <- 1:nrow(nuts3_temp)
 
-" Have a look at data at nuts-3 lebv"
+# Have a look at data at nuts-3 level
 head(nuts3_temp)
 
 ```
@@ -430,8 +447,28 @@ Now, to check that things are aggregated correctly, we can overlap our raster da
 
 ```{r maps-spataggreg}
 
+## We first need to merge the datasets to have both polygons and temperature data
+#  Add the poly_id variable to the nuts3 shapefile
+nuts3_sp$poly_id <- 1:nrow(nuts3_sp)
+
+# Merge aggregated temperature data using poly_id
+nuts3_sp <- merge(nuts3_sp, nuts3_temp, by = "poly_id", all.x = TRUE)
+
+
+# pUT NExt to each others temperature a raster-cell levels and temperature at nuts3 level to compare if temperature corresponds:
+# Plot raster temperature
+par(mfrow=c(1,2))  # set up the plotting area to have 2 plots side by side
+plot(terra_temp[[1]], main = "Raster Temperature (ERA5)", col = terrain.colors(100))
+# Plot nuts3 temperature
+plot(nuts3_sp["t2m_valid_time=741484800"], main = "NUTS3 Aggregated Temperature", col = terrain.colors(100))
+par(mfrow=c(1,1))  # reset plotting area
+
+
+
 
 ```
+
+There is a mistage here in the way we identify the raster -> need to update this
 
 
 # Next steps to go further
@@ -476,9 +513,6 @@ If we want now to estimage the effect of temperature on economic activity in the
 # install.packages("eurostat")  
 library(eurostat)
 
-# Search for GDP datasets at NUTS level
-search_results <- search_eurostat("GDP NUTS", type = "dataset")
-View(search_results)
 
 # The main dataset for regional GDP is "nama_10r_3gdp"
 # This contains GDP data at NUTS2 and NUTS3 levels
@@ -496,29 +530,35 @@ gdp_nuts3 <- gdp_data %>%
   filter(nchar(as.character(geo)) == 5)
 
 # Filter for specific unit (e.g., current prices in millions of euros)
+table(gdp_nuts3$unit)
 # Common units:
-# - MIO_EUR: Million euros
+# - MIO_EUR: Million real euros
 # - MIO_PPS: Million purchasing power standards
 
 gdp_nuts3_current <- gdp_nuts3 %>%
   filter(unit == "MIO_EUR")
 
 # View available years
-unique(gdp_nuts3_current$time)
+unique(gdp_nuts3_current$TIME_PERIOD)
 
-# Filter for years where you have weather data 
-gdp_nuts3_recent <- gdp_nuts3_current %>%
-  filter(time >= 2000 & time <= 2024)
 
 # View the result
-head(gdp_nuts3_recent, 20)
+head(gdp_nuts3_current)
 
 # Plot some of the GDP series to have a look
 # Select randomly 10 NUTS3 regions
-
+set.seed(123)
+sample_nuts3 <- sample(unique(gdp_nuts3_current$geo), 10)
+gdp_nuts3_filter <- gdp_nuts3_current %>%
+  filter(geo %in% sample_nuts3)
 
 # plot their time series
-
+ggplot(gdp_nuts3_filter, aes(x = TIME_PERIOD, y = values, color = geo)) +
+  geom_line() +
+  labs(title = "GDP Time Series for Sample NUTS3 Regions",
+       x = "Year",
+       y = "GDP (Million Euros)") +
+  theme_minimal()
 
 
 ```
